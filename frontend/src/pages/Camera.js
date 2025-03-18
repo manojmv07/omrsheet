@@ -25,10 +25,18 @@ const Camera = () => {
   // Memoize initializeCamera to prevent unnecessary re-renders
   const initializeCamera = useCallback(async () => {
     try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: true,
+      // Try to get the best possible resolution for the device
+      const constraints = {
+        video: {
+          facingMode: 'environment',
+          width: { ideal: window.innerWidth },
+          height: { ideal: window.innerHeight },
+          aspectRatio: { ideal: window.innerWidth / window.innerHeight }
+        },
         audio: false
-      });
+      };
+
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       if (videoRef.current) {
         videoRef.current.srcObject = newStream;
@@ -43,7 +51,6 @@ const Camera = () => {
     }
   }, []);
 
-  // Add this effect to initialize camera after showing the camera UI
   useEffect(() => {
     let mounted = true;
 
@@ -61,18 +68,42 @@ const Camera = () => {
     };
   }, [showCamera, stream, initializeCamera]);
 
-  // Cleanup effect
   useEffect(() => {
     return () => {
       if (stream) {
-        console.log('Cleaning up camera stream');
-        stream.getTracks().forEach(track => {
-          track.stop();
-          console.log('Stopped track:', track.kind);
-        });
+        stream.getTracks().forEach(track => track.stop());
       }
     };
   }, [stream]);
+
+  const renderStepIndicator = () => {
+    return (
+      <div className="flex items-center mb-8">
+        {[1, 2, 3].map((num) => (
+          <React.Fragment key={num}>
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                step === num
+                  ? 'bg-blue-600 text-white'
+                  : step > num
+                  ? 'bg-green-500 text-white'
+                  : 'bg-gray-200 text-gray-600'
+              }`}
+            >
+              {step > num ? '✓' : num}
+            </div>
+            {num < 3 && (
+              <div
+                className={`flex-1 h-1 mx-2 ${
+                  step > num ? 'bg-green-500' : 'bg-gray-200'
+                }`}
+              />
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  };
 
   const handleTestDetailsSubmit = (e) => {
     e.preventDefault();
@@ -132,8 +163,6 @@ const Camera = () => {
   const handleTestSelect = (e) => {
     const selectedId = e.target.value;
     setSelectedTest(selectedId);
-    
-    // Find the selected test data
     const test = savedTests.find(t => t.id.toString() === selectedId.toString());
     if (test) {
       setEvaluationData(test);
@@ -155,7 +184,7 @@ const Camera = () => {
     const updatedTests = savedTests.filter(test => test.id.toString() !== selectedTest.toString());
     localStorage.setItem('savedTests', JSON.stringify(updatedTests));
     setSavedTests(updatedTests);
-    clearTest(); // Clear selection after deleting
+    clearTest();
     alert('Test deleted successfully!');
   };
 
@@ -166,34 +195,15 @@ const Camera = () => {
     }
 
     try {
-      // Check for camera support
       if (!navigator.mediaDevices?.getUserMedia) {
-        alert('Camera API is not supported in your browser. Please use Chrome, Firefox, or Edge.');
+        alert('Camera API is not supported in your browser.');
         return;
       }
 
-      console.log('Starting camera...');
       setShowCamera(true);
 
     } catch (err) {
       console.error('Camera error:', err);
-      let message = '';
-
-      switch (err.name) {
-        case 'NotAllowedError':
-          message = 'Camera access was denied. Please allow camera access in your browser settings.';
-          break;
-        case 'NotFoundError':
-          message = 'No camera found. Please connect a camera and try again.';
-          break;
-        case 'NotReadableError':
-          message = 'Camera is in use by another application. Please close other apps using the camera.';
-          break;
-        default:
-          message = `Could not start camera: ${err.message || 'Unknown error'}`;
-      }
-
-      alert(message);
       setShowCamera(false);
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -222,100 +232,60 @@ const Camera = () => {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(videoRef.current, 0, 0);
     
-    const imageData = canvas.toDataURL('image/jpeg');
+    const imageData = canvas.toDataURL('image/jpeg', 0.9);
     processImage(imageData);
   };
 
   const processImage = async (imageData) => {
     setProcessing(true);
     try {
-      // Convert base64 to blob
       const base64Response = await fetch(imageData);
       const blob = await base64Response.blob();
 
-      // Create form data
       const formData = new FormData();
       formData.append('image', blob, 'omr.jpg');
-      formData.append('testData', JSON.stringify(evaluationData));
+      formData.append('answer_key', JSON.stringify(evaluationData.answerKey.map(ans => {
+        const options = ['A', 'B', 'C', 'D'];
+        return options.map(opt => opt === ans ? 'X' : 'O').join('');
+      })));
+      formData.append('question_marks', JSON.stringify(evaluationData.marks));
 
-      // Send to backend
-      const response = await fetch('http://localhost:8000/api/evaluate', {
+      const response = await fetch('http://localhost:8000/process_omr', {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        throw new Error('Evaluation failed');
+        throw new Error('Failed to process OMR sheet');
       }
 
       const result = await response.json();
-      
-      // Process results
-      const processedResults = {
-        usn: result.usn,
-        totalMarks: result.answers.reduce((total, ans, idx) => {
-          return total + (ans.isCorrect ? evaluationData.marks[idx] : 0);
-        }, 0),
-        maxMarks: evaluationData.marks.reduce((a, b) => a + b, 0),
-        answers: result.answers,
-        testName: evaluationData.name,
-        timestamp: new Date().toISOString()
-      };
-
-      setEvaluationResults(processedResults);
-
-      // Save to localStorage
-      const savedResults = JSON.parse(localStorage.getItem('evaluationResults') || '[]');
-      savedResults.push(processedResults);
-      localStorage.setItem('evaluationResults', JSON.stringify(savedResults));
+      setEvaluationResults(result);
+      setProcessing(false);
 
     } catch (error) {
       console.error('Error processing image:', error);
-      alert('Error processing image. Please try again.');
-    } finally {
+      alert('Failed to process OMR sheet. Please try again.');
       setProcessing(false);
     }
   };
 
-  const renderStepIndicator = () => (
-    <div className="flex items-center justify-center mb-8">
-      {[1, 2, 3].map((stepNumber) => (
-        <div key={stepNumber} className="flex items-center">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-            step === stepNumber 
-              ? 'bg-blue-600 text-white' 
-              : step > stepNumber 
-                ? 'bg-green-500 text-white'
-                : 'bg-gray-200 text-gray-600'
-          }`}>
-            {step > stepNumber ? '✓' : stepNumber}
-          </div>
-          {stepNumber < 3 && (
-            <div className={`w-16 h-1 mx-2 ${
-              step > stepNumber ? 'bg-green-500' : 'bg-gray-200'
-            }`} />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="container mx-auto px-4 max-w-4xl">
+    <div className="min-h-screen bg-gray-50 py-4 sm:py-8">
+      <div className="container mx-auto px-2 sm:px-4 max-w-4xl">
         {!showCamera ? (
           <>
-            <h1 className="text-3xl font-bold text-center text-gray-800 mb-8">
+            <h1 className="text-2xl sm:text-3xl font-bold text-center text-gray-800 mb-4 sm:mb-8">
               Smart OMR Evaluator
             </h1>
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
-              <div className="p-6">
+            <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4 sm:mb-8">
+              <div className="p-4 sm:p-6">
                 {renderStepIndicator()}
-                <div className="mb-6">
-                  <h2 className="text-2xl font-semibold text-gray-800 mb-2">
+                <div className="mb-4 sm:mb-6">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-2">
                     {step === 1 ? 'Create New Test' : step === 2 ? 'Assign Marks' : 'Set Answer Key'}
                   </h2>
-                  <p className="text-gray-600">
+                  <p className="text-sm sm:text-base text-gray-600">
                     {step === 1 
                       ? 'Enter test details to get started'
                       : step === 2 
@@ -324,7 +294,7 @@ const Camera = () => {
                     }
                   </p>
                 </div>
-
+                
                 {step === 1 && (
                   <form onSubmit={handleTestDetailsSubmit} className="space-y-6">
                     <div>
@@ -443,10 +413,10 @@ const Camera = () => {
               </div>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-6">
-                <h2 className="text-2xl font-semibold text-gray-800 mb-6">Evaluate Test</h2>
-                <div className="space-y-6">
+            <div className="bg-white rounded-lg sm:rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="p-4 sm:p-6">
+                <h2 className="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6">Evaluate Test</h2>
+                <div className="space-y-4 sm:space-y-6">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Select Test to Evaluate
@@ -454,7 +424,7 @@ const Camera = () => {
                     <select
                       value={selectedTest}
                       onChange={handleTestSelect}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                      className="w-full px-3 sm:px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors text-base"
                     >
                       <option value="">Select a test</option>
                       {savedTests.map((test) => (
@@ -464,28 +434,28 @@ const Camera = () => {
                       ))}
                     </select>
                   </div>
-                  <div className="flex space-x-4">
+                  <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
                     <button
                       onClick={startCamera}
                       disabled={!selectedTest}
-                      className="flex-1 bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                      className="w-full sm:flex-1 bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm sm:text-base"
                     >
                       <span className="flex items-center justify-center">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0111.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+                          <path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
                         </svg>
                         Start Camera
                       </span>
                     </button>
                     <button
                       onClick={clearTest}
-                      className="flex-1 bg-gray-600 text-white py-3 px-4 rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
+                      className="w-full sm:flex-1 bg-gray-600 text-white py-3 px-4 rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors text-sm sm:text-base"
                     >
                       Clear Selection
                     </button>
                     <button
                       onClick={deleteTest}
-                      className="flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
+                      className="w-full sm:flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors text-sm sm:text-base"
                     >
                       Delete Test
                     </button>
@@ -495,84 +465,66 @@ const Camera = () => {
             </div>
           </>
         ) : (
-          <div className="fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl shadow-lg overflow-hidden max-w-4xl w-full">
-              <div className="relative">
+          <div className="fixed inset-0 bg-black z-50">
+            <div className="h-full flex flex-col">
+              <div className="relative flex-1">
                 <div className="absolute top-4 left-4 z-10">
-                  <h3 className="text-white text-lg font-semibold shadow-sm">
+                  <h3 className="text-white text-base sm:text-lg font-semibold shadow-sm">
                     {processing ? 'Processing...' : 'Capturing OMR Sheet'}
                   </h3>
                 </div>
                 {!evaluationResults ? (
-                  <div className="relative">
-                    <div className="bg-black aspect-video">
+                  <div className="relative h-full">
+                    <div className="h-full bg-black">
                       <video
                         ref={videoRef}
                         autoPlay
                         playsInline
                         muted
-                        className="w-full h-full object-contain"
+                        className="w-full h-full object-cover"
                       />
                     </div>
-                    <div className="absolute bottom-4 right-4 flex space-x-4">
+                    <div className="absolute bottom-4 inset-x-4 flex justify-center space-x-6">
                       <button
                         onClick={captureImage}
                         disabled={processing || !stream}
-                        className="bg-green-600 text-white p-3 rounded-full hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors disabled:bg-gray-400"
+                        className="bg-green-600 text-white p-4 rounded-full hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors disabled:bg-gray-400"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
                         </svg>
                       </button>
                       <button
                         onClick={stopCamera}
-                        className="bg-red-600 text-white p-3 rounded-full hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
+                        className="bg-red-600 text-white p-4 rounded-full hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="p-6 bg-white">
+                  <div className="p-4 sm:p-6 bg-white h-full overflow-y-auto">
                     <div className="mb-6">
-                      <h3 className="text-2xl font-bold text-gray-800 mb-2">Evaluation Results</h3>
-                      <div className="flex items-center justify-between mb-4">
-                        <p className="text-gray-600">USN: <span className="font-semibold">{evaluationResults.usn}</span></p>
-                        <p className="text-gray-600">Score: <span className="font-semibold">{evaluationResults.totalMarks}/{evaluationResults.maxMarks}</span></p>
+                      <h3 className="text-xl sm:text-2xl font-bold text-gray-800 mb-4">Evaluation Results</h3>
+                      <div className="space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-gray-600">Score: <span className="font-semibold text-lg">{evaluationResults.score}%</span></p>
+                          <p className="text-gray-600">Marks: <span className="font-semibold text-lg">{evaluationResults.obtained_marks}/{evaluationResults.total_marks}</span></p>
+                        </div>
+                        <p className="text-gray-600">Correct Answers: <span className="font-semibold text-lg">{evaluationResults.correct_answers}/{evaluationResults.total_questions}</span></p>
                       </div>
                     </div>
                     
-                    <div className="space-y-4">
-                      <h4 className="font-semibold text-gray-700">Answer Analysis:</h4>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                        {evaluationResults.answers.map((answer, index) => (
-                          <div
-                            key={index}
-                            className={`p-3 rounded-lg ${
-                              answer.isCorrect ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                            }`}
-                          >
-                            <p className="font-medium">Q{index + 1}</p>
-                            <p className="text-sm">
-                              Marked: {answer.marked || '-'}
-                              <br />
-                              Correct: {evaluationData.answerKey[index]}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-6 flex justify-end space-x-4">
+                    <div className="mt-6 flex justify-end">
                       <button
                         onClick={() => {
                           setEvaluationResults(null);
                           stopCamera();
                         }}
-                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
+                        className="w-full sm:w-auto px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
                       >
                         Close
                       </button>

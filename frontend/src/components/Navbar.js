@@ -39,7 +39,17 @@ function Navbar() {
                   : 'text-gray-700 hover:bg-gray-100'
               }`}
             >
-              Evaluation
+              Camera Evaluation
+            </Link>
+            <Link
+              to="/upload"
+              className={`px-3 py-2 rounded-md text-sm font-medium ${
+                isActive('/upload')
+                  ? 'bg-primary text-white'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              Upload Evaluation
             </Link>
             <Link
               to="/results"
@@ -101,8 +111,7 @@ function Navbar() {
         <div className="pt-2 pb-3 space-y-1">
           <Link
             to="/"
-            onClick={() => setIsMenuOpen(false)}
-            className={`block px-3 py-2 text-base font-medium ${
+            className={`block px-3 py-2 rounded-md text-base font-medium ${
               isActive('/')
                 ? 'bg-primary text-white'
                 : 'text-gray-700 hover:bg-gray-100'
@@ -112,19 +121,27 @@ function Navbar() {
           </Link>
           <Link
             to="/camera"
-            onClick={() => setIsMenuOpen(false)}
-            className={`block px-3 py-2 text-base font-medium ${
+            className={`block px-3 py-2 rounded-md text-base font-medium ${
               isActive('/camera')
                 ? 'bg-primary text-white'
                 : 'text-gray-700 hover:bg-gray-100'
             }`}
           >
-            Evaluation
+            Camera Evaluation
+          </Link>
+          <Link
+            to="/upload"
+            className={`block px-3 py-2 rounded-md text-base font-medium ${
+              isActive('/upload')
+                ? 'bg-primary text-white'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            Upload Evaluation
           </Link>
           <Link
             to="/results"
-            onClick={() => setIsMenuOpen(false)}
-            className={`block px-3 py-2 text-base font-medium ${
+            className={`block px-3 py-2 rounded-md text-base font-medium ${
               isActive('/results')
                 ? 'bg-primary text-white'
                 : 'text-gray-700 hover:bg-gray-100'
@@ -134,8 +151,7 @@ function Navbar() {
           </Link>
           <Link
             to="/about"
-            onClick={() => setIsMenuOpen(false)}
-            className={`block px-3 py-2 text-base font-medium ${
+            className={`block px-3 py-2 rounded-md text-base font-medium ${
               isActive('/about')
                 ? 'bg-primary text-white'
                 : 'text-gray-700 hover:bg-gray-100'

@@ -4,141 +4,137 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
+const FormData = require('form-data');
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
 // Configure multer for file upload
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, uploadsDir);
+    const uploadDir = path.join(__dirname, '../uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    cb(null, `${Date.now()}-${file.originalname}`);
-  },
+    cb(null, Date.now() + '-' + file.originalname);
+  }
 });
 
 const upload = multer({ storage: storage });
 
-// In-memory storage for test results (replace with database in production)
-const testResults = [];
+// Enable CORS
+app.use(cors());
+app.use(express.json());
+
+// Store for results
+const results = [];
 
 // Routes
 app.post('/api/evaluate', upload.single('image'), async (req, res) => {
   try {
+    console.log('Received evaluation request');
+    console.log('Request body:', req.body);
+    console.log('File:', req.file);
+
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
     }
 
-    const { testId, answerKey } = req.body;
-    if (!testId || !answerKey) {
-      return res.status(400).json({ error: 'Test ID and answer key are required' });
+    const answer_key = req.body.answer_key;
+    const question_marks = req.body.question_marks;
+
+    if (!answer_key) {
+      return res.status(400).json({ error: 'Answer key is required' });
     }
 
-    // Send image to Python service for processing
+    if (!question_marks) {
+      return res.status(400).json({ error: 'Question marks are required' });
+    }
+
+    // Create form data for Python service
     const formData = new FormData();
     formData.append('image', fs.createReadStream(req.file.path));
-    formData.append('answer_key', answerKey);
+    formData.append('answer_key', answer_key);
+    formData.append('question_marks', question_marks);
 
+    console.log('Sending request to Python service with:', {
+      answer_key,
+      question_marks,
+      file: req.file.path
+    });
+
+    // Send to Python service for processing
     const pythonServiceResponse = await axios.post(
       'http://localhost:5000/process_omr',
       formData,
       {
         headers: {
           ...formData.getHeaders(),
+          'Accept': 'application/json',
         },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
       }
     );
 
-    const result = pythonServiceResponse.data;
-
-    // Save the result
-    const testResult = {
-      id: Date.now(),
-      testId,
-      score: result.score,
-      correctAnswers: result.correct_answers,
-      totalQuestions: result.total_questions,
-      studentAnswers: result.student_answers,
-      timestamp: new Date(),
-    };
-
-    testResults.push(testResult);
+    console.log('Received response from Python service:', pythonServiceResponse.data);
 
     // Clean up uploaded file
     fs.unlinkSync(req.file.path);
 
-    res.json(testResult);
+    // Store result
+    const result = {
+      id: Date.now().toString(),
+      ...pythonServiceResponse.data,
+      timestamp: new Date()
+    };
+    results.push(result);
+
+    res.json(result);
   } catch (error) {
-    console.error('Error processing OMR:', error);
-    res.status(500).json({ error: 'Failed to process OMR sheet' });
-  }
-});
-
-app.get('/api/results', (req, res) => {
-  try {
-    const { testId } = req.query;
-    let filteredResults = testResults;
-
-    if (testId) {
-      filteredResults = testResults.filter(result => result.testId === testId);
-    }
-
-    res.json(filteredResults);
-  } catch (error) {
-    console.error('Error fetching results:', error);
-    res.status(500).json({ error: 'Failed to fetch results' });
-  }
-});
-
-app.get('/api/test/:testId', (req, res) => {
-  try {
-    const { testId } = req.params;
-    const testResults = testResults.filter(result => result.testId === testId);
+    console.error('Error details:', error.response?.data || error.message);
     
-    if (testResults.length === 0) {
-      return res.status(404).json({ error: 'Test not found' });
+    // Clean up uploaded file if it exists
+    if (req.file && req.file.path) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (cleanupError) {
+        console.error('Error cleaning up file:', cleanupError);
+      }
     }
 
-    // Calculate statistics
-    const totalStudents = testResults.length;
-    const averageScore = testResults.reduce((acc, curr) => acc + curr.score, 0) / totalStudents;
-    const highestScore = Math.max(...testResults.map(r => r.score));
-    const lowestScore = Math.min(...testResults.map(r => r.score));
-
-    res.json({
-      testId,
-      statistics: {
-        totalStudents,
-        averageScore,
-        highestScore,
-        lowestScore,
-      },
-      results: testResults,
-    });
-  } catch (error) {
-    console.error('Error fetching test results:', error);
-    res.status(500).json({ error: 'Failed to fetch test results' });
+    // Send appropriate error response
+    if (error.response) {
+      // Error from Python service
+      res.status(error.response.status).json({
+        error: error.response.data.detail || 'Failed to process OMR sheet'
+      });
+    } else {
+      // Other errors
+      res.status(500).json({
+        error: 'Failed to process OMR sheet: ' + (error.message || 'Unknown error')
+      });
+    }
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something broke!' });
+// Get all results
+app.get('/api/results', (req, res) => {
+  res.json(results);
 });
 
-// Start server
+// Get specific result
+app.get('/api/results/:id', (req, res) => {
+  const result = results.find(r => r.id === req.params.id);
+  if (!result) {
+    return res.status(404).json({ error: 'Result not found' });
+  }
+  res.json(result);
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });

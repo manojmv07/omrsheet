@@ -1,308 +1,382 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import {
+  Box,
+  Button,
+  TextField,
+  Typography,
+  Paper,
+  Grid,
+  CircularProgress,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  ButtonGroup,
+} from '@mui/material';
 
-function Upload() {
+const Upload = () => {
   const [files, setFiles] = useState([]);
-  const [answerKey, setAnswerKey] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
-  const [savedAnswerKeys, setSavedAnswerKeys] = useState([]);
   const [subjectName, setSubjectName] = useState('');
-  const [questionCount, setQuestionCount] = useState('');
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
+  const [numQuestions, setNumQuestions] = useState('');
+  const [questions, setQuestions] = useState([]);
+  const [step, setStep] = useState(1);
+  const [savedTests, setSavedTests] = useState([]);
+  const [selectedTest, setSelectedTest] = useState('');
 
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      videoRef.current.srcObject = stream;
-      streamRef.current = stream;
-      setShowCamera(true);
-    } catch (err) {
-      console.error('Error accessing camera:', err);
-      alert('Error accessing camera. Please make sure you have given camera permissions.');
-    }
-  };
+  const OPTIONS = ['A', 'B', 'C', 'D'];
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      setShowCamera(false);
-    }
-  };
-
-  const captureImage = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
-    
-    canvas.toBlob((blob) => {
-      const file = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' });
-      setFiles(prev => [...prev, file]);
-    }, 'image/jpeg');
-    
-    stopCamera();
-  };
-
-  const saveAnswerKey = () => {
-    if (!subjectName || !questionCount || !answerKey) {
-      alert('Please fill in all fields (Subject Name, Number of Questions, and Answer Key)');
-      return;
-    }
-
-    const newAnswerKey = {
-      id: Date.now(),
-      subjectName,
-      questionCount: parseInt(questionCount),
-      answerKey,
-    };
-
-    setSavedAnswerKeys(prev => [...prev, newAnswerKey]);
-    // Save to localStorage
-    const existingKeys = JSON.parse(localStorage.getItem('savedAnswerKeys') || '[]');
-    localStorage.setItem('savedAnswerKeys', JSON.stringify([...existingKeys, newAnswerKey]));
-
-    // Clear form
-    setSubjectName('');
-    setQuestionCount('');
-    setAnswerKey('');
-  };
-
-  const loadAnswerKey = (savedKey) => {
-    setAnswerKey(savedKey.answerKey);
-    setSubjectName(savedKey.subjectName);
-    setQuestionCount(savedKey.questionCount.toString());
-  };
+  // Load saved tests from localStorage
+  useEffect(() => {
+    const tests = JSON.parse(localStorage.getItem('savedTests') || '[]');
+    setSavedTests(tests);
+  }, []);
 
   const handleFileChange = (e) => {
     setFiles(Array.from(e.target.files));
   };
 
-  const handleAnswerKeyChange = (e) => {
-    setAnswerKey(e.target.value);
+  const handleSubjectSubmit = (e) => {
+    e.preventDefault();
+    if (!subjectName || !numQuestions || isNaN(numQuestions)) {
+      alert('Please enter valid subject name and number of questions.');
+      return;
+    }
+    
+    // Initialize questions array with empty answers and default marks of 1
+    const newQuestions = Array(parseInt(numQuestions)).fill(null).map((_, i) => ({
+      number: i + 1,
+      answer: null,
+      marks: 1
+    }));
+    setQuestions(newQuestions);
+    setStep(2);
+  };
+
+  const handleMarksChange = (index, marks) => {
+    setQuestions(prevQuestions => {
+      const newQuestions = [...prevQuestions];
+      newQuestions[index] = {
+        ...newQuestions[index],
+        marks: Math.max(0, parseInt(marks) || 0)
+      };
+      return newQuestions;
+    });
+  };
+
+  const handleAnswerChange = (index, option) => {
+    setQuestions(prevQuestions => {
+      const newQuestions = [...prevQuestions];
+      newQuestions[index] = {
+        ...newQuestions[index],
+        answer: option,
+      };
+      return newQuestions;
+    });
+  };
+
+  const handleNextAfterMarks = () => {
+    if (questions.some(q => q.marks <= 0)) {
+      alert('Please assign valid marks (greater than 0) for all questions.');
+      return;
+    }
+    setStep(3);
+  };
+
+  const saveAnswerKey = () => {
+    if (questions.some(q => q.answer === null)) {
+      alert('Please select answers for all questions before saving.');
+      return;
+    }
+
+    const testKey = {
+      id: Date.now().toString(),
+      subjectName,
+      numQuestions: parseInt(numQuestions),
+      answers: questions.map(q => q.answer),
+      marks: questions.map(q => q.marks),
+      createdAt: new Date().toISOString(),
+    };
+
+    const existingTests = JSON.parse(localStorage.getItem('savedTests') || '[]');
+    const updatedTests = [...existingTests, testKey];
+    localStorage.setItem('savedTests', JSON.stringify(updatedTests));
+    setSavedTests(updatedTests);
+    setSelectedTest(testKey.id);
+    alert('Answer key saved successfully!');
+    setStep(1);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (files.length === 0) {
+      alert('Please upload at least one OMR sheet image.');
+      return;
+    }
+    if (!selectedTest) {
+      alert('Please select a test to evaluate against.');
+      return;
+    }
+
+    const selectedTestData = savedTests.find(test => test.id === selectedTest);
+    if (!selectedTestData) {
+      alert('Selected test not found.');
+      return;
+    }
+
     setLoading(true);
 
-    const formData = new FormData();
-    files.forEach((file) => {
-      formData.append('omr_sheets', file);
-    });
-    formData.append('answer_key', answerKey);
-    formData.append('subject_name', subjectName);
-
     try {
-      const response = await fetch('http://localhost:8000/api/evaluate', {
-        method: 'POST',
-        body: formData,
-      });
+      // Process each file one by one
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('image', file);
+        
+        // Convert answers to X/O format based on bubble positions
+        const answerKeyArray = [];
+        selectedTestData.answers.forEach(answer => {
+          const bubbleIndex = OPTIONS.indexOf(answer);
+          OPTIONS.forEach((_, index) => {
+            answerKeyArray.push(index === bubbleIndex ? 'X' : 'O');
+          });
+        });
+        
+        console.log('Sending data:', {
+          answers: selectedTestData.answers,
+          marks: selectedTestData.marks,
+          answerKeyArray
+        });
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log(data);
-      } else {
-        throw new Error('Upload failed');
+        formData.append('answer_key', JSON.stringify(answerKeyArray));
+        formData.append('question_marks', JSON.stringify(selectedTestData.marks));
+
+        const response = await fetch('http://localhost:3001/api/evaluate', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Evaluation failed');
+        }
+
+        const result = await response.json();
+        console.log('Received result:', result);
+        
+        // Create a simplified result message
+        let resultMessage = `Test: ${selectedTestData.subjectName}\n`;
+        resultMessage += `Score: ${result.score}%\n`;
+        resultMessage += `Marks: ${result.obtained_marks} out of ${result.total_marks}\n`;
+        resultMessage += `Correct Answers: ${result.correct_answers} out of ${result.total_questions}`;
+        
+        alert(resultMessage);
       }
     } catch (error) {
       console.error('Error:', error);
+      alert('Failed to evaluate OMR sheets: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="bg-white shadow sm:rounded-lg">
-        <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg leading-6 font-medium text-gray-900">
-            Upload OMR Sheets
-          </h3>
-          <div className="mt-2 max-w-xl text-sm text-gray-500">
-            <p>Upload scanned OMR sheets and provide the answer key for evaluation.</p>
-          </div>
-          <form onSubmit={handleSubmit} className="mt-5">
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">
-                  OMR Sheets
-                </label>
-                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md">
-                  <div className="space-y-1 text-center">
-                    {showCamera ? (
-                      <div className="camera-container">
-                        <video
-                          ref={videoRef}
-                          autoPlay
-                          playsInline
-                          className="w-full max-w-md mx-auto"
-                        />
-                        <button
-                          type="button"
-                          onClick={captureImage}
-                          className="mt-2 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-blue-700"
-                        >
-                          Capture
-                        </button>
-                        <button
-                          type="button"
-                          onClick={stopCamera}
-                          className="mt-2 ml-2 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-center">
-                          <button
-                            type="button"
-                            onClick={startCamera}
-                            className="mb-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-blue-700"
-                          >
-                            Open Camera
-                          </button>
-                        </div>
-                        <svg
-                          className="mx-auto h-12 w-12 text-gray-400"
-                          stroke="currentColor"
-                          fill="none"
-                          viewBox="0 0 48 48"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                            strokeWidth={2}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                        <div className="flex text-sm text-gray-600">
-                          <label className="relative cursor-pointer bg-white rounded-md font-medium text-primary hover:text-blue-500 focus-within:outline-none">
-                            <span>Upload files</span>
-                            <input
-                              id="file-upload"
-                              name="file-upload"
-                              type="file"
-                              className="sr-only"
-                              multiple
-                              onChange={handleFileChange}
-                              accept="image/*"
-                            />
-                          </label>
-                          <p className="pl-1">or drag and drop</p>
-                        </div>
-                        <p className="text-xs text-gray-500">PNG, JPG up to 10MB each</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {files.length > 0 && (
-                  <div className="mt-2">
-                    <h4 className="text-sm font-medium text-gray-700">Selected files:</h4>
-                    <ul className="mt-1 text-sm text-gray-500">
-                      {files.map((file, index) => (
-                        <li key={index}>{file.name}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
+    <Box p={3}>
+      <Typography variant="h4" gutterBottom>
+        OMR Sheet Evaluation
+      </Typography>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Subject Name
-                  </label>
-                  <input
-                    type="text"
-                    value={subjectName}
-                    onChange={(e) => setSubjectName(e.target.value)}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
-                    placeholder="Enter subject name"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Number of Questions
-                  </label>
-                  <input
-                    type="number"
-                    value={questionCount}
-                    onChange={(e) => setQuestionCount(e.target.value)}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
-                    placeholder="Enter number of questions"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Answer Key
-                  </label>
-                  <textarea
-                    value={answerKey}
-                    onChange={handleAnswerKeyChange}
-                    rows={4}
-                    className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
-                    placeholder="Enter answer key (e.g., 1:A, 2:B, 3:C...)"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={saveAnswerKey}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
-                >
-                  Save Answer Key
-                </button>
-              </div>
-
-              {savedAnswerKeys.length > 0 && (
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Saved Answer Keys:</h4>
-                  <div className="space-y-2">
-                    {savedAnswerKeys.map((key) => (
-                      <div
-                        key={key.id}
-                        className="flex justify-between items-center p-2 bg-gray-50 rounded-md"
-                      >
-                        <span className="text-sm text-gray-600">
-                          {key.subjectName} ({key.questionCount} questions)
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => loadAnswerKey(key)}
-                          className="text-sm text-primary hover:text-blue-700"
-                        >
-                          Load
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <button
-                  type="submit"
-                  disabled={loading || files.length === 0 || !answerKey}
-                  className={`w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white ${
-                    loading || files.length === 0 || !answerKey
-                      ? 'bg-gray-400 cursor-not-allowed'
-                      : 'bg-primary hover:bg-blue-700'
-                  }`}
-                >
-                  {loading ? 'Processing...' : 'Upload and Evaluate'}
-                </button>
-              </div>
-            </div>
+      {step === 1 && (
+        <Paper elevation={3} sx={{ p: 2, mb: 2 }}>
+          <form onSubmit={handleSubjectSubmit}>
+            <Grid container spacing={2}>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Subject Name"
+                  value={subjectName}
+                  onChange={(e) => setSubjectName(e.target.value)}
+                  required
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  label="Number of Questions"
+                  type="number"
+                  value={numQuestions}
+                  onChange={(e) => setNumQuestions(e.target.value)}
+                  required
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <Button variant="contained" type="submit">
+                  Next
+                </Button>
+              </Grid>
+            </Grid>
           </form>
-        </div>
-      </div>
-    </div>
+        </Paper>
+      )}
+
+      {step === 2 && (
+        <Paper elevation={3} sx={{ p: 2, mb: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Assign Marks for Each Question
+          </Typography>
+          <Typography variant="body2" color="textSecondary" paragraph>
+            Enter the marks for each question (must be greater than 0)
+          </Typography>
+          <Grid container spacing={2}>
+            {questions.map((question, index) => (
+              <Grid item xs={12} sm={6} md={4} lg={3} key={index}>
+                <Box 
+                  sx={{
+                    border: '1px solid #e0e0e0',
+                    borderRadius: 1,
+                    p: 2
+                  }}
+                >
+                  <Typography sx={{ mb: 1 }}>Question {question.number}</Typography>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    label="Marks"
+                    value={question.marks}
+                    onChange={(e) => handleMarksChange(index, e.target.value)}
+                    inputProps={{ min: "1", step: "1" }}
+                    required
+                  />
+                </Box>
+              </Grid>
+            ))}
+            <Grid item xs={12} sx={{ mt: 2 }}>
+              <Button 
+                variant="contained" 
+                onClick={handleNextAfterMarks}
+                sx={{ mr: 1 }}
+              >
+                Next
+              </Button>
+              <Button 
+                variant="outlined" 
+                onClick={() => setStep(1)}
+              >
+                Back
+              </Button>
+            </Grid>
+          </Grid>
+        </Paper>
+      )}
+
+      {step === 3 && (
+        <Paper elevation={3} sx={{ p: 2, mb: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Select Correct Answers
+          </Typography>
+          <Typography variant="body2" color="textSecondary" paragraph>
+            Click on A, B, C, or D for each question
+          </Typography>
+          <Grid container spacing={2}>
+            {questions.map((question, index) => (
+              <Grid item xs={12} sm={6} md={4} lg={3} key={index}>
+                <Box 
+                  sx={{
+                    border: '1px solid #e0e0e0',
+                    borderRadius: 1,
+                    p: 2
+                  }}
+                >
+                  <Typography sx={{ mb: 1 }}>
+                    Q{question.number} ({question.marks} marks):
+                  </Typography>
+                  <ButtonGroup variant="outlined" fullWidth>
+                    {OPTIONS.map((option) => (
+                      <Button
+                        key={option}
+                        variant={question.answer === option ? "contained" : "outlined"}
+                        onClick={() => handleAnswerChange(index, option)}
+                        sx={{ flexGrow: 1 }}
+                      >
+                        {option}
+                      </Button>
+                    ))}
+                  </ButtonGroup>
+                </Box>
+              </Grid>
+            ))}
+            <Grid item xs={12} sx={{ mt: 2 }}>
+              <Button 
+                variant="contained" 
+                onClick={saveAnswerKey} 
+                sx={{ mr: 1 }}
+              >
+                Save Answer Key
+              </Button>
+              <Button 
+                variant="outlined" 
+                onClick={() => setStep(2)}
+              >
+                Back
+              </Button>
+            </Grid>
+          </Grid>
+        </Paper>
+      )}
+
+      <Paper elevation={3} sx={{ p: 2 }}>
+        <form onSubmit={handleSubmit}>
+          <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Select Test</InputLabel>
+                <Select
+                  value={selectedTest}
+                  onChange={(e) => setSelectedTest(e.target.value)}
+                  label="Select Test"
+                >
+                  {savedTests.map((test) => (
+                    <MenuItem key={test.id} value={test.id}>
+                      {test.subjectName} - {new Date(test.createdAt).toLocaleDateString()}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={12}>
+              <Button
+                variant="contained"
+                component="label"
+                sx={{ mr: 1 }}
+              >
+                Upload OMR Sheets
+                <input
+                  type="file"
+                  hidden
+                  multiple
+                  accept="image/*"
+                  onChange={handleFileChange}
+                />
+              </Button>
+              <Button
+                variant="contained"
+                type="submit"
+                disabled={loading || files.length === 0}
+              >
+                {loading ? <CircularProgress size={24} /> : 'Evaluate'}
+              </Button>
+            </Grid>
+            {files.length > 0 && (
+              <Grid item xs={12}>
+                <Typography>
+                  Selected files: {files.map(f => f.name).join(', ')}
+                </Typography>
+              </Grid>
+            )}
+          </Grid>
+        </form>
+      </Paper>
+    </Box>
   );
-}
+};
 
 export default Upload;
