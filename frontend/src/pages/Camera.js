@@ -250,7 +250,8 @@ const Camera = () => {
       })));
       formData.append('question_marks', JSON.stringify(evaluationData.marks));
 
-      const response = await fetch('http://localhost:8000/process_omr', {
+      const apiUrl = process.env.REACT_APP_API_URL || '/process_omr';
+      const response = await fetch(apiUrl, {
         method: 'POST',
         body: formData,
       });
